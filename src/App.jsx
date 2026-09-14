@@ -1257,9 +1257,9 @@ function StatCard({ label, value, color }) {
 // waiting stock right now, so the floor reads the alarm from across the room.
 function FloorAlert({ n, label, bg, fg }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 22px", borderRadius: 14, background: bg, color: fg }}>
-      <span style={{ fontSize: 40, fontWeight: 800, lineHeight: 1 }}>{n}</span>
-      <span style={{ fontSize: 24, fontWeight: 800, letterSpacing: 0.6 }}>{label}</span>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 18px", borderRadius: 12, background: bg, color: fg }}>
+      <span style={{ fontSize: 32, fontWeight: 800, lineHeight: 1 }}>{n}</span>
+      <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: 0.6 }}>{label}</span>
     </div>
   );
 }
@@ -1440,9 +1440,14 @@ function FloorColumn({ s, cfg, total, shown, more, owned, grow }) {
 // The rotating detail panel. The product name is the headline: it is what a worker
 // matches against the part in their hand, so it takes the full row width and the
 // largest type, with the STK code demoted to a quiet second line beside the quantity.
-// `narrow` is the twin layout, where two of these share the wall.
-function FloorSpotlight({ spot, detail, idx, total, narrow }) {
-  const z = narrow
+// `size` picks the type scale: "half" when the panel owns half the wall.
+function FloorSpotlight({ spot, detail, idx, total, size }) {
+  // `half` is the department layout: the panel owns a whole half of the wall, so the
+  // type steps up to what reads from the far side of the floor. `narrow` is the old
+  // side-by-side-with-a-queue sizing, kept for any layout that still pairs the two.
+  const z = size === "half"
+    ? { w: null, pad: "14px 20px", inv: 80, invGap: "2px 0 8px", chip: 30, row: "10px 12px", gap: 13, dotTop: 11, name: 34, sku: 19, qty: 30, unit: 17, st: 22, stMin: 130, left: 34, ctnq: 27, cap: 4 }
+    : size === "narrow"
     ? { w: 470, pad: "18px 18px", inv: 64, invGap: "8px 0 10px", chip: 24, row: "12px 10px", gap: 10, dotTop: 9, name: 26, sku: 15, qty: 23, unit: 14, st: 17, stMin: 88, left: 24, ctnq: 21 }
     : { w: 500, pad: "20px 22px", inv: 78, invGap: "10px 0 12px", chip: 28, row: "14px 14px", gap: 13, dotTop: 12, name: 30, sku: 17, qty: 27, unit: 15, st: 20, stMin: 104, left: 28, ctnq: 24 };
   // Which track's cartons this panel reports: a Packing screen counts packed, anything
@@ -1457,19 +1462,26 @@ function FloorSpotlight({ spot, detail, idx, total, narrow }) {
   const urgentDone = allDone && spot.priority === "urgent";
   const urgent = spot && spot.priority === "urgent";
   return (
-    <div style={{ width: z.w, flex: `0 0 ${z.w}px`, background: allDone ? C.green + "14" : urgent ? C.danger + "14" : C.bg2, border: `1px solid ${urgentDone ? C.green : allDone ? C.green + "88" : urgent ? C.danger + "88" : C.border}`, borderRadius: 16, padding: z.pad, display: "flex", flexDirection: "column", minHeight: 0, boxShadow: urgentDone ? `0 0 0 2px ${C.bg}, 0 0 0 4px ${C.danger}` : "none" }}>
+    <div style={{ ...(z.w ? { width: z.w, flex: `0 0 ${z.w}px` } : { flex: 1, minWidth: 0 }), background: allDone ? C.green + "14" : urgent ? C.danger + "14" : C.bg2, border: `1px solid ${urgentDone ? C.green : allDone ? C.green + "88" : urgent ? C.danger + "88" : C.border}`, borderRadius: 16, padding: z.pad, display: "flex", flexDirection: "column", minHeight: 0, boxShadow: urgentDone ? `0 0 0 2px ${C.bg}, 0 0 0 4px ${C.danger}` : "none" }}>
       {!spot ? <div style={{ margin: "auto", color: C.text3 }}>No active orders</div> : (
         <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <Pill color={stage.color} style={{ fontSize: 18, padding: "7px 16px" }}>● {stage.label}</Pill>
-              {urgent && <Pill color="#fff" bg={C.danger} border={C.danger} style={{ fontSize: 18, padding: "7px 16px" }}>Urgent</Pill>}
-              {dtag && <Pill color={dtag.color} style={{ fontSize: 18, padding: "7px 16px" }}>{dtag.label}</Pill>}
+          {size !== "half" && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <Pill color={stage.color} style={{ fontSize: 18, padding: "7px 16px" }}>● {stage.label}</Pill>
+                {urgent && <Pill color="#fff" bg={C.danger} border={C.danger} style={{ fontSize: 18, padding: "7px 16px" }}>Urgent</Pill>}
+                {dtag && <Pill color={dtag.color} style={{ fontSize: 18, padding: "7px 16px" }}>{dtag.label}</Pill>}
+              </div>
+              <span style={{ fontSize: 18, fontWeight: 700, color: C.text3 }}>{idx + 1} / {total}</span>
             </div>
-            <span style={{ fontSize: 18, fontWeight: 700, color: C.text3 }}>{idx + 1} / {total}</span>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 14, margin: z.invGap }}>
+            <span style={{ fontFamily: MONO, fontSize: z.inv, fontWeight: 800, color: C.accent2, lineHeight: 1, letterSpacing: -2 }}>{spot.invoice_number}</span>
+            {size === "half" && urgent && <Pill color="#fff" bg={C.danger} border={C.danger} style={{ fontSize: 20, padding: "6px 16px" }}>Urgent</Pill>}
+            {size === "half" && dtag && <Pill color={dtag.color} style={{ fontSize: 20, padding: "6px 16px" }}>{dtag.label}</Pill>}
+            {size === "half" && <span style={{ marginLeft: "auto", fontSize: 22, fontWeight: 700, color: C.text3 }}>{idx + 1} / {total}</span>}
           </div>
-          <div style={{ fontFamily: MONO, fontSize: z.inv, fontWeight: 800, color: C.accent2, margin: z.invGap, lineHeight: 1, letterSpacing: -2 }}>{spot.invoice_number}</div>
-          {detail && detail.id === spot.id && (detail.items || []).length > 0 && (() => {
+          {size !== "half" && detail && detail.id === spot.id && (detail.items || []).length > 0 && (() => {
             const its = detail.items || [];
             const n = its.length;
             const done = its.filter((it) => itemStatusKeyFor(it, track) === "done").length;
@@ -1492,7 +1504,7 @@ function FloorSpotlight({ spot, detail, idx, total, narrow }) {
           })()}
           <div style={{ flex: 1, overflowY: "auto" }}>
             {detail && detail.id === spot.id
-              ? (detail.items || []).map((it) => {
+              ? (z.cap ? (detail.items || []).slice(0, z.cap) : (detail.items || [])).map((it) => {
                 const st = itemStatFor(it, track);
                 const dot = st.k === "done" ? C.green : st.k === "in_progress" ? C.packing : C.accent;
                 const isDone = st.k === "done";
@@ -1532,6 +1544,11 @@ function FloorSpotlight({ spot, detail, idx, total, narrow }) {
                 );
               })
               : <div style={{ color: C.text3, padding: "12px 0" }}>Loading line items…</div>}
+            {detail && detail.id === spot.id && z.cap && (detail.items || []).length > z.cap && (
+              <div style={{ textAlign: "center", fontSize: 22, fontWeight: 800, color: C.text3, background: "rgba(255,255,255,0.03)", border: `1px dashed ${C.border2}`, borderRadius: 10, padding: "10px 12px", marginTop: 8 }}>
+                ＋{(detail.items || []).length - z.cap} more line{(detail.items || []).length - z.cap === 1 ? "" : "s"}
+              </div>
+            )}
           </div>
           <div style={{ marginTop: 12 }}>
             <Pill color={cd.tone} style={{ fontSize: 22, padding: "9px 16px" }}><Icon name="clock" size={20} color={cd.tone} /> {fmtDay(spot.required_delivery_date)} · {cd.text} left</Pill>
@@ -1651,7 +1668,7 @@ function FloorDisplay({ onExit }) {
     <div style={{ position: "fixed", inset: 0, background: C.bg, zIndex: 2000, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ width: 1920, height: 1080, flexShrink: 0, transform: `scale(${wallScale})`, transformOrigin: "center center", display: "flex", flexDirection: "column", padding: 22, boxSizing: "border-box" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", marginBottom: 10 }}>
         {chrome && (
           <Btn variant="primary" onClick={onExit} title="Exit full-screen (or press Esc)"
             style={{ padding: "13px 24px", fontSize: 16, fontWeight: 800 }}>
@@ -1701,13 +1718,13 @@ function FloorDisplay({ onExit }) {
         </button>
         </>)}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
-          <span style={{ fontFamily: MONO, fontSize: 120, fontWeight: 800, color: C.text, letterSpacing: 3 }}>{clock}</span>
+          <span style={{ fontFamily: MONO, fontSize: 74, fontWeight: 800, color: C.text, letterSpacing: 2, lineHeight: 1 }}>{clock}</span>
         </div>
       </div>
 
       {/* Alarm strip — states the glance answer up front: how many need attention now */}
       {view === "board" && (floorAlerts.late > 0 || floorAlerts.urgent > 0 || floorAlerts.stock > 0) && (
-        <div style={{ display: "flex", gap: 14, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
           {floorAlerts.late > 0 && <FloorAlert n={floorAlerts.late} label="LATE" bg={C.danger} fg="#fff" />}
           {floorAlerts.urgent > 0 && <FloorAlert n={floorAlerts.urgent} label="URGENT" bg={C.accent} fg="#231304" />}
           {floorAlerts.stock > 0 && <FloorAlert n={floorAlerts.stock} label="WAITING STOCK" bg={C.hold} fg="#231304" />}
@@ -1722,10 +1739,16 @@ function FloorDisplay({ onExit }) {
             its own queue, its own detail panel, its own colour wrapping both. */}
         {view === "board" && layout === "twin" && floorCols.map((c, i) => {
           const half = i === 0 ? spotA : spotB;
+          // The queue list is gone: a worker standing at their own station wants the
+          // order in front of them in a size they can read, not a list of what is
+          // behind it. The count in the bar still says how many the department has.
           return (
-            <div key={c.s} style={{ flex: 1, minWidth: 0, display: "flex", gap: 12, padding: 12, borderRadius: 18, background: c.cfg.color + "29", border: `5px solid ${c.cfg.color}BF` }}>
-              <FloorColumn s={c.s} cfg={c.cfg} total={c.total} shown={c.shown} more={c.more} owned grow />
-              <FloorSpotlight spot={half.spot} detail={half.detail} idx={half.idx} total={half.total} narrow />
+            <div key={c.s} style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10, padding: 12, borderRadius: 18, background: c.cfg.color + "29", border: `5px solid ${c.cfg.color}BF` }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, background: c.cfg.color, color: "#17110a", borderRadius: 10, padding: "8px 18px", flexShrink: 0 }}>
+                <span style={{ fontSize: 34, fontWeight: 800, letterSpacing: 2.5, textTransform: "uppercase", lineHeight: 1.1 }}>{c.cfg.label}</span>
+                <b style={{ fontSize: 40, fontWeight: 800, lineHeight: 1 }}>{c.total}</b>
+              </div>
+              <FloorSpotlight spot={half.spot} detail={half.detail} idx={half.idx} total={half.total} size="half" />
             </div>
           );
         })}
