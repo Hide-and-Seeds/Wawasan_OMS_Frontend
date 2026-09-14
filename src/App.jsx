@@ -1247,9 +1247,9 @@ function OrderBoard({ user, search, weekOnly, statusFilter, onOpenOrder, refresh
 // ─── Floor Display (70" wall view) ──────────────────────────────────────────────
 function StatCard({ label, value, color }) {
   return (
-    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "9px 20px", minWidth: 132 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: C.text3, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 36, fontWeight: 800, color, lineHeight: 1.05, marginTop: 2 }}>{value}</div>
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "5px 14px", minWidth: 112 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: 1, color: C.text3, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1.05, marginTop: 1 }}>{value}</div>
     </div>
   );
 }
@@ -1668,7 +1668,7 @@ function FloorDisplay({ onExit }) {
     <div style={{ position: "fixed", inset: 0, background: C.bg, zIndex: 2000, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
       <div style={{ width: 1920, height: 1080, flexShrink: 0, transform: `scale(${wallScale})`, transformOrigin: "center center", display: "flex", flexDirection: "column", padding: 22, boxSizing: "border-box" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 8 }}>
         {chrome && (
           <Btn variant="primary" onClick={onExit} title="Exit full-screen (or press Esc)"
             style={{ padding: "13px 24px", fontSize: 16, fontWeight: 800 }}>
@@ -1676,8 +1676,8 @@ function FloorDisplay({ onExit }) {
           </Btn>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <Logo size={46} />
-          <div style={{ fontSize: 36, fontWeight: 800, letterSpacing: 0.5 }}>
+          <Logo size={38} />
+          <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: 0.5 }}>
             <span style={{ color: C.text }}>WAWASAN LTS </span><span style={{ color: layout === "twin" ? C.production : C.accent }}>{view === "scoreboard" ? "SCOREBOARD" : lay.title}</span>
           </div>
         </div>
@@ -1718,7 +1718,7 @@ function FloorDisplay({ onExit }) {
         </button>
         </>)}
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 16 }}>
-          <span style={{ fontFamily: MONO, fontSize: 74, fontWeight: 800, color: C.text, letterSpacing: 2, lineHeight: 1 }}>{clock}</span>
+          <span style={{ fontFamily: MONO, fontSize: 58, fontWeight: 800, color: C.text, letterSpacing: 2, lineHeight: 1 }}>{clock}</span>
         </div>
       </div>
 
