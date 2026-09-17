@@ -1321,11 +1321,28 @@ function FloorScoreboard() {
 // One rotating spotlight: cycles a pool of orders every 10s and lazily loads the
 // picked order's line items. The twin layout runs two of these side by side, one per
 // department, so each half only ever details an order from its own stage.
-function useSpotlight(pool, resetKey) {
+const FLOOR_DETAIL_CAP = { half: 4 };
+
+// The wall cycles pages, not orders. An order with more lines than fit used to be cut
+// off at the cap and the rotation moved straight on, so the lines past it were never
+// shown at all; now every page of an order is its own turn and the order is finished
+// before the next one starts.
+function useSpotlight(pool, resetKey, cap) {
   const [idx, setIdx] = useState(0);
   const [detail, setDetail] = useState(null);
   const cache = useRef({});
-  const len = pool.length;
+  // One slide per page of each order, in order. Line counts come from the board
+  // payload, which already carries items[], so paging does not wait on the detail fetch.
+  const slides = useMemo(() => {
+    const out = [];
+    pool.forEach((o, orderIdx) => {
+      const lines = (o.items || []).length;
+      const pages = cap > 0 ? Math.max(1, Math.ceil(lines / cap)) : 1;
+      for (let page = 0; page < pages; page++) out.push({ o, orderIdx, page, pages });
+    });
+    return out;
+  }, [pool, cap]);
+  const len = slides.length;
   useEffect(() => { setIdx(0); }, [resetKey]);
   // Every board poll rebuilds the pool, which drops the cached line items with it, so
   // the wall picks up ticks made on the Order Board instead of showing a stale list.
@@ -1335,7 +1352,8 @@ function useSpotlight(pool, resetKey) {
     const t = setInterval(() => setIdx((i) => (i + 1) % len), 10000);
     return () => clearInterval(t);
   }, [len]);
-  const spot = len ? pool[idx % len] : null;
+  const slide = len ? slides[idx % len] : null;
+  const spot = slide ? slide.o : null;
   const spotId = spot ? spot.id : null;
   useEffect(() => {
     let cancel = false;
@@ -1347,7 +1365,8 @@ function useSpotlight(pool, resetKey) {
     }
     go(); return () => { cancel = true; };
   }, [spotId]);
-  return { spot, detail, idx: len ? idx % len : 0, total: len };
+  return { spot, detail, page: slide ? slide.page : 0,
+    idx: slide ? slide.orderIdx : 0, total: pool.length };
 }
 
 // A stage column on the wall. `owned` marks a column a single department is
@@ -1441,18 +1460,21 @@ function FloorColumn({ s, cfg, total, shown, more, owned, grow }) {
 // matches against the part in their hand, so it takes the full row width and the
 // largest type, with the STK code demoted to a quiet second line beside the quantity.
 // `size` picks the type scale: "half" when the panel owns half the wall.
-function FloorSpotlight({ spot, detail, idx, total, size }) {
+function FloorSpotlight({ spot, detail, idx, total, page = 0, size }) {
   // `half` is the department layout: the panel owns a whole half of the wall, so the
   // type steps up to what reads from the far side of the floor. `narrow` is the old
   // side-by-side-with-a-queue sizing, kept for any layout that still pairs the two.
   const z = size === "half"
-    ? { w: null, pad: "14px 20px", inv: 80, invGap: "2px 0 8px", chip: 30, row: "10px 12px", gap: 13, dotTop: 11, name: 34, sku: 19, qty: 30, unit: 17, st: 22, stMin: 130, left: 34, ctnq: 27, cap: 4 }
+    ? { w: null, pad: "14px 20px", inv: 80, invGap: "2px 0 6px", chip: 30, row: "11px 12px", gap: 14, dotTop: 12, name: 38, sku: 21, qty: 33, unit: 18, st: 25, stMin: 142, left: 39, ctnq: 30, cap: FLOOR_DETAIL_CAP.half }
     : size === "narrow"
     ? { w: 470, pad: "18px 18px", inv: 64, invGap: "8px 0 10px", chip: 24, row: "12px 10px", gap: 10, dotTop: 9, name: 26, sku: 15, qty: 23, unit: 14, st: 17, stMin: 88, left: 24, ctnq: 21 }
     : { w: 500, pad: "20px 22px", inv: 78, invGap: "10px 0 12px", chip: 28, row: "14px 14px", gap: 13, dotTop: 12, name: 30, sku: 17, qty: 27, unit: 15, st: 20, stMin: 104, left: 28, ctnq: 24 };
   // Which track's cartons this panel reports: a Packing screen counts packed, anything
   // else counts produced.
   const track = spot && spot.stage === "packing" ? "packing" : "production";
+  const lineCount = (detail && spot && detail.id === spot.id && (detail.items || []).length) || 0;
+  const maxPage = z.cap > 0 && lineCount > 0 ? Math.ceil(lineCount / z.cap) - 1 : 0;
+  const pg = Math.min(Math.max(0, page), maxPage);
   const stage = spot ? (STAGE_LABELS[spot.stage] || { label: spot.stage, color: C.accent }) : null;
   const cd = spot ? countdown(spot.required_delivery_date) : null;
   const dtag = spot ? deliveryTag(spot) : null;
@@ -1479,7 +1501,12 @@ function FloorSpotlight({ spot, detail, idx, total, size }) {
             <span style={{ fontFamily: MONO, fontSize: z.inv, fontWeight: 800, color: C.accent2, lineHeight: 1, letterSpacing: -2 }}>{spot.invoice_number}</span>
             {size === "half" && urgent && <Pill color="#fff" bg={C.danger} border={C.danger} style={{ fontSize: 20, padding: "6px 16px" }}>Urgent</Pill>}
             {size === "half" && dtag && <Pill color={dtag.color} style={{ fontSize: 20, padding: "6px 16px" }}>{dtag.label}</Pill>}
-            {size === "half" && <span style={{ marginLeft: "auto", fontSize: 22, fontWeight: 700, color: C.text3 }}>{idx + 1} / {total}</span>}
+            {size === "half" && maxPage > 0 && (
+              <span style={{ marginLeft: "auto", fontSize: 21, fontWeight: 800, color: C.accent2, background: C.accent + "1f", border: `1px solid ${C.accent}55`, borderRadius: 8, padding: "4px 14px" }}>
+                PAGE {pg + 1} / {maxPage + 1}
+              </span>
+            )}
+            <span style={{ ...(size === "half" && maxPage > 0 ? null : { marginLeft: "auto" }), fontSize: 22, fontWeight: 700, color: C.text3 }}>{idx + 1} / {total}</span>
           </div>
           {size !== "half" && detail && detail.id === spot.id && (detail.items || []).length > 0 && (() => {
             const its = detail.items || [];
@@ -1504,7 +1531,7 @@ function FloorSpotlight({ spot, detail, idx, total, size }) {
           })()}
           <div style={{ flex: 1, overflowY: "auto" }}>
             {detail && detail.id === spot.id
-              ? (z.cap ? (detail.items || []).slice(0, z.cap) : (detail.items || [])).map((it) => {
+              ? (z.cap ? (detail.items || []).slice(pg * z.cap, pg * z.cap + z.cap) : (detail.items || [])).map((it) => {
                 const st = itemStatFor(it, track);
                 const dot = st.k === "done" ? C.green : st.k === "in_progress" ? C.packing : C.accent;
                 const isDone = st.k === "done";
@@ -1544,11 +1571,6 @@ function FloorSpotlight({ spot, detail, idx, total, size }) {
                 );
               })
               : <div style={{ color: C.text3, padding: "12px 0" }}>Loading line items…</div>}
-            {detail && detail.id === spot.id && z.cap && (detail.items || []).length > z.cap && (
-              <div style={{ textAlign: "center", fontSize: 22, fontWeight: 800, color: C.text3, background: "rgba(255,255,255,0.03)", border: `1px dashed ${C.border2}`, borderRadius: 10, padding: "10px 12px", marginTop: 8 }}>
-                ＋{(detail.items || []).length - z.cap} more line{(detail.items || []).length - z.cap === 1 ? "" : "s"}
-              </div>
-            )}
           </div>
           <div style={{ marginTop: 12 }}>
             <Pill color={cd.tone} style={{ fontSize: 22, padding: "9px 16px" }}><Icon name="clock" size={20} color={cd.tone} /> {fmtDay(spot.required_delivery_date)} · {cd.text} left</Pill>
@@ -1618,8 +1640,9 @@ function FloorDisplay({ onExit }) {
     return stages.flatMap((s) => board[s] || []);
   }, [board, filter, layout]);
   const poolB = useMemo(() => (board && layout === "twin" ? (board.packing || []) : []), [board, layout]);
-  const spotA = useSpotlight(poolA, layout + "|" + filter);
-  const spotB = useSpotlight(poolB, layout);
+  const detailCap = layout === "twin" ? FLOOR_DETAIL_CAP.half : 0;
+  const spotA = useSpotlight(poolA, layout + "|" + filter, detailCap);
+  const spotB = useSpotlight(poolB, layout, detailCap);
 
   const clock = now.toLocaleTimeString("en-GB", { hour12: false });
   // Which columns the wall shows is the layout's call. In the four-stage view the
@@ -1748,7 +1771,7 @@ function FloorDisplay({ onExit }) {
                 <span style={{ fontSize: 34, fontWeight: 800, letterSpacing: 2.5, textTransform: "uppercase", lineHeight: 1.1 }}>{c.cfg.label}</span>
                 <b style={{ fontSize: 40, fontWeight: 800, lineHeight: 1 }}>{c.total}</b>
               </div>
-              <FloorSpotlight spot={half.spot} detail={half.detail} idx={half.idx} total={half.total} size="half" />
+              <FloorSpotlight spot={half.spot} detail={half.detail} idx={half.idx} total={half.total} page={half.page} size="half" />
             </div>
           );
         })}
