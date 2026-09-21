@@ -1321,13 +1321,49 @@ function FloorScoreboard() {
 // One rotating spotlight: cycles a pool of orders every 10s and lazily loads the
 // picked order's line items. The twin layout runs two of these side by side, one per
 // department, so each half only ever details an order from its own stage.
-const FLOOR_DETAIL_CAP = { half: 4 };
+// Product names run to 80 characters and wrap onto a second line, which makes a line
+// row half again as tall. Paging on a fixed count therefore ran four tall rows into a
+// panel that only holds three, and the overflow was simply cut off at the bottom of
+// the screen — the last line of the invoice was invisible on the wall. Pages are now
+// packed to the panel's height instead, so short names still share a page four at a
+// time while long ones break earlier and nothing is ever clipped.
+//   list  - usable height of the line list, measured on the 1920x1080 wall canvas
+//   base  - a row minus its first name line
+//   line  - one line of product name
+//   wrapAt- names longer than this are assumed to wrap. Measured against all 133
+//           names in the client stocklist: the shortest that wraps is 33 characters,
+//           so 32 never does. A name between 33 and 37 may be charged for a line it
+//           does not use, which costs an early page break and never a clipped row.
+const FLOOR_DETAIL_BUDGET = { half: { list: 645, base: 114, line: 47, wrapAt: 32, max: 4 } };
+
+// "PRODUCT (VARIANT) - PACK SPEC": the product is the headline, the pack spec is
+// demoted to the STK reference line. Split once, here, so the page estimate measures
+// the same string the row renders.
+function splitItemName(it) {
+  const n = (it && it.name) || "";
+  const dash = n.indexOf(" - ");
+  return dash > 0 ? [n.slice(0, dash), n.slice(dash + 3)] : [n, ""];
+}
+
+function floorPages(items, b) {
+  const list = items || [];
+  if (!b) return [list];
+  const pages = [];
+  let cur = [], used = 0;
+  list.forEach((it) => {
+    const h = b.base + b.line * (splitItemName(it)[0].length > b.wrapAt ? 2 : 1);
+    if (cur.length && (used + h > b.list || cur.length >= b.max)) { pages.push(cur); cur = []; used = 0; }
+    cur.push(it); used += h;
+  });
+  if (cur.length) pages.push(cur);
+  return pages.length ? pages : [[]];
+}
 
 // The wall cycles pages, not orders. An order with more lines than fit used to be cut
 // off at the cap and the rotation moved straight on, so the lines past it were never
 // shown at all; now every page of an order is its own turn and the order is finished
 // before the next one starts.
-function useSpotlight(pool, resetKey, cap) {
+function useSpotlight(pool, resetKey, budget) {
   const [idx, setIdx] = useState(0);
   const [detail, setDetail] = useState(null);
   const cache = useRef({});
@@ -1336,12 +1372,11 @@ function useSpotlight(pool, resetKey, cap) {
   const slides = useMemo(() => {
     const out = [];
     pool.forEach((o, orderIdx) => {
-      const lines = (o.items || []).length;
-      const pages = cap > 0 ? Math.max(1, Math.ceil(lines / cap)) : 1;
+      const pages = floorPages(o.items, budget).length;
       for (let page = 0; page < pages; page++) out.push({ o, orderIdx, page, pages });
     });
     return out;
-  }, [pool, cap]);
+  }, [pool, budget]);
   const len = slides.length;
   useEffect(() => { setIdx(0); }, [resetKey]);
   // Every board poll rebuilds the pool, which drops the cached line items with it, so
@@ -1465,15 +1500,19 @@ function FloorSpotlight({ spot, detail, idx, total, page = 0, size }) {
   // type steps up to what reads from the far side of the floor. `narrow` is the old
   // side-by-side-with-a-queue sizing, kept for any layout that still pairs the two.
   const z = size === "half"
-    ? { w: null, pad: "14px 20px", inv: 80, invGap: "2px 0 6px", chip: 30, row: "11px 12px", gap: 14, dotTop: 12, name: 38, sku: 21, qty: 33, unit: 18, st: 25, stMin: 142, left: 39, ctnq: 30, cap: FLOOR_DETAIL_CAP.half }
+    ? { w: null, pad: "14px 20px", inv: 52, invGap: "2px 0 8px", chip: 30, row: "12px 12px", gap: 14, dotTop: 13, name: 42, sku: 22, qty: 35, unit: 19, st: 26, stMin: 150, left: 42, ctnq: 32, budget: FLOOR_DETAIL_BUDGET.half }
     : size === "narrow"
     ? { w: 470, pad: "18px 18px", inv: 64, invGap: "8px 0 10px", chip: 24, row: "12px 10px", gap: 10, dotTop: 9, name: 26, sku: 15, qty: 23, unit: 14, st: 17, stMin: 88, left: 24, ctnq: 21 }
     : { w: 500, pad: "20px 22px", inv: 78, invGap: "10px 0 12px", chip: 28, row: "14px 14px", gap: 13, dotTop: 12, name: 30, sku: 17, qty: 27, unit: 15, st: 20, stMin: 104, left: 28, ctnq: 24 };
   // Which track's cartons this panel reports: a Packing screen counts packed, anything
   // else counts produced.
   const track = spot && spot.stage === "packing" ? "packing" : "production";
-  const lineCount = (detail && spot && detail.id === spot.id && (detail.items || []).length) || 0;
-  const maxPage = z.cap > 0 && lineCount > 0 ? Math.ceil(lineCount / z.cap) - 1 : 0;
+  // Paged off the lines this panel is actually holding: the board and the detail fetch
+  // can disagree for a poll or two, and trusting the board's count would render a page
+  // that has nothing on it.
+  const shown = detail && spot && detail.id === spot.id ? detail.items || [] : null;
+  const pages = shown ? floorPages(shown, z.budget) : null;
+  const maxPage = pages ? pages.length - 1 : 0;
   const pg = Math.min(Math.max(0, page), maxPage);
   const stage = spot ? (STAGE_LABELS[spot.stage] || { label: spot.stage, color: C.accent }) : null;
   const cd = spot ? countdown(spot.required_delivery_date) : null;
@@ -1530,17 +1569,15 @@ function FloorSpotlight({ spot, detail, idx, total, page = 0, size }) {
             );
           })()}
           <div style={{ flex: 1, overflowY: "auto" }}>
-            {detail && detail.id === spot.id
-              ? (z.cap ? (detail.items || []).slice(pg * z.cap, pg * z.cap + z.cap) : (detail.items || [])).map((it) => {
+            {pages
+              ? (pages[pg] || []).map((it) => {
                 const st = itemStatFor(it, track);
                 const dot = st.k === "done" ? C.green : st.k === "in_progress" ? C.packing : C.accent;
                 const isDone = st.k === "done";
                 // Product names run 40-60 characters and share one shape:
                 // "PRODUCT (VARIANT) - PACK SPEC". The product takes the large type and may
                 // wrap to two lines; the pack spec drops onto the STK reference line.
-                const dash = (it.name || "").indexOf(" - ");
-                const head = dash > 0 ? it.name.slice(0, dash) : (it.name || "");
-                const spec = dash > 0 ? it.name.slice(dash + 3) : "";
+                const [head, spec] = splitItemName(it);
                 const ref = it.sku + (spec ? " \u00b7 " + spec : "");
                 const carton = isCartonLine(it);
                 const prog = cartonProgress(it, track);
@@ -1556,7 +1593,7 @@ function FloorSpotlight({ spot, detail, idx, total, page = 0, size }) {
                         <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
                           <span style={{ flexShrink: 0, fontSize: z.left, fontWeight: 800, color: finished ? C.green : C.accent2, whiteSpace: "nowrap" }}>{finished ? "✓ DONE" : cLeft + " CTN LEFT"}</span>
                           <span style={{ flexShrink: 0, fontSize: z.ctnq, fontWeight: 700, color: C.text, whiteSpace: "nowrap" }}>{cDone} / {cTotal}<span style={{ fontSize: z.unit, fontWeight: 600, color: C.text3 }}> CTN</span></span>
-                          {!finished && <span style={{ marginLeft: "auto", flexShrink: 0, fontSize: z.st, fontWeight: 800, color: dot, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>{st.short}</span>}
+                          {!finished && <span style={{ marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap", fontSize: z.st, fontWeight: 800, color: dot, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>{st.short}</span>}
                         </div>
                         <div style={{ fontFamily: MONO, fontSize: z.sku, fontWeight: 600, color: C.text3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ref}</div>
                       </>) : (
@@ -1640,9 +1677,9 @@ function FloorDisplay({ onExit }) {
     return stages.flatMap((s) => board[s] || []);
   }, [board, filter, layout]);
   const poolB = useMemo(() => (board && layout === "twin" ? (board.packing || []) : []), [board, layout]);
-  const detailCap = layout === "twin" ? FLOOR_DETAIL_CAP.half : 0;
-  const spotA = useSpotlight(poolA, layout + "|" + filter, detailCap);
-  const spotB = useSpotlight(poolB, layout, detailCap);
+  const detailBudget = layout === "twin" ? FLOOR_DETAIL_BUDGET.half : null;
+  const spotA = useSpotlight(poolA, layout + "|" + filter, detailBudget);
+  const spotB = useSpotlight(poolB, layout, detailBudget);
 
   const clock = now.toLocaleTimeString("en-GB", { hour12: false });
   // Which columns the wall shows is the layout's call. In the four-stage view the
