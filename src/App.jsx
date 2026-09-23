@@ -100,18 +100,17 @@ const NON_ADMIN_ROLES = ["super_admin", "production_lead", "production_staff", "
 // them — listed just below Delivery in the nav.)
 const BOARD_ROLES = NON_ADMIN_ROLES.filter((r) => r !== "delivery_team");
 
-// Reward scorecard / leaderboard — built 2026-06-10, parked for future. Flip to
-// true to re-enable: the Reports "Scoreboard" tab, the Floor Display Board/Scoreboard
-// toggle, and the System Settings weight editor all come back. The components
-// (ScoreboardReport, FloorScoreboard), the weight settings code and the backend
-// /reports/scorecard + system_settings weights stay in place, just unreachable.
-const REWARD_SYSTEM_ENABLED = false;
+// Reward scorecard / leaderboard — built 2026-06-10, parked, switched on 2026-09-23 at
+// the owners' request. Brings back the Reports "Scoreboard" tab, the Floor Display
+// Board/Scoreboard toggle (inside the auto-hiding chrome, so the wall itself is
+// unchanged) and the System Settings weight editor. Set to false to park it again.
+const REWARD_SYSTEM_ENABLED = true;
 
 // Staff / Person-in-charge ranking tabs in Reports — they rank people (a de-facto
-// scoreboard). Hidden 2026-06-10 at the user's request. The StaffReport / PicReport /
-// StaffDetail components and the backend /reports/staff + /reports/pic endpoints
-// stay in place; flip to true to bring the two tabs back.
-const STAFF_RANKING_ENABLED = false;
+// scoreboard). Hidden 2026-06-10 at the user's request, switched back on 2026-09-23 when
+// the owners asked for every section to be reachable. That reverses the earlier request,
+// so if anyone asks why staff are being ranked again, this is the line to flip back.
+const STAFF_RANKING_ENABLED = true;
 
 // Split board — one order shown in every stage column it still has work in (a line in
 // Production while a sibling line is already in Packing), so the two run in parallel
@@ -250,6 +249,10 @@ function shipLabel(dv) {
 
 const NAV = [
   { id: "board", label: "Order Board", icon: "board", roles: [...BOARD_ROLES, "admin"] },
+  // The page and POST /orders/import both shipped, but nothing ever linked here, so the
+  // CSV import was unreachable from the app. Boss-only, matching the endpoint's own
+  // guard — an Admin given the page would just get a 403 out of it.
+  { id: "import", label: "Import Invoices", icon: "upload", roles: ["super_admin"] },
   { id: "dashboard", label: "Dashboard", icon: "dashboard", roles: ["super_admin", "admin"] },
   { id: "delivery", label: "Delivery", icon: "truck", roles: ["super_admin", "delivery_team", "admin", "production_lead"] },
   { id: "floor", label: "Floor Display", icon: "display" }, // every role; rendered as a distinct launch button, not a workspace tab
@@ -1318,9 +1321,6 @@ function FloorScoreboard() {
   );
 }
 
-// One rotating spotlight: cycles a pool of orders every 10s and lazily loads the
-// picked order's line items. The twin layout runs two of these side by side, one per
-// department, so each half only ever details an order from its own stage.
 // Product names run to 80 characters and wrap onto a second line, which makes a line
 // row half again as tall. Paging on a fixed count therefore ran four tall rows into a
 // panel that only holds three, and the overflow was simply cut off at the bottom of
@@ -1359,6 +1359,9 @@ function floorPages(items, b) {
   return pages.length ? pages : [[]];
 }
 
+// One rotating spotlight: cycles a pool of orders every 10s and lazily loads the
+// picked order's line items. The twin layout runs two of these side by side, one per
+// department, so each half only ever details an order from its own stage.
 // The wall cycles pages, not orders. An order with more lines than fit used to be cut
 // off at the cap and the rotation moved straight on, so the lines past it were never
 // shown at all; now every page of an order is its own turn and the order is finished
@@ -1574,9 +1577,9 @@ function FloorSpotlight({ spot, detail, idx, total, page = 0, size }) {
                 const st = itemStatFor(it, track);
                 const dot = st.k === "done" ? C.green : st.k === "in_progress" ? C.packing : C.accent;
                 const isDone = st.k === "done";
-                // Product names run 40-60 characters and share one shape:
-                // "PRODUCT (VARIANT) - PACK SPEC". The product takes the large type and may
-                // wrap to two lines; the pack spec drops onto the STK reference line.
+                // Product names run to 80 characters. Where one carries a pack spec the
+                // product takes the large type and the spec drops onto the STK reference
+                // line; the headline itself may still wrap to two lines.
                 const [head, spec] = splitItemName(it);
                 const ref = it.sku + (spec ? " \u00b7 " + spec : "");
                 const carton = isCartonLine(it);
@@ -1855,7 +1858,9 @@ function OrderDetail({ orderId, user, onUpdated, onClose, changes }) {
   // and put it on hold (soft, reversible). Advancing stages and Cancel stay Boss-only.
   const canRoute = ["super_admin", "admin"].includes(user.role);
   const canAssignPic = ["super_admin", "admin", "production_lead"].includes(user.role); // floor supervisor may assign the PIC too
-  const roleCanMark = ["super_admin", "production_lead", "production_staff", "packing_staff"].includes(user.role);
+  // "admin" was missing here while the board card's canMarkTrack and the server both
+  // allow it, so the same tick worked on the card and was hidden inside this panel.
+  const roleCanMark = ["super_admin", "admin", "production_lead", "production_staff", "packing_staff"].includes(user.role);
   const isLead = user.role === "production_lead";
   const isFloor = ["production_staff", "packing_staff"].includes(user.role); // pure floor worker — keep their view minimal
   const isDispatch = user.role === "delivery_team"; // delivery coordinator — keep their view delivery-focused
@@ -4417,7 +4422,7 @@ function Remarks({ user }) {
   const [monthContent, setMonthContent] = useState("");
   const [mBusy, setMBusy] = useState(false);
   const [mSaved, setMSaved] = useState(false);
-  const canPost = ["production_lead", "admin"].includes(user.role); // Reenee (lead) + Misha (admin) co-edit the weekly remark
+  const canPost = ["super_admin", "production_lead", "admin"].includes(user.role); // Reenee (lead) + Misha (admin) co-edit the weekly remark; the owners may too
   const canEditMonthly = user.role === "super_admin"; // Boss writes the monthly summary
   const curMonthKey = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
   const monthKeyOf = (dateStr) => { const d = new Date(dateStr); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
@@ -4429,9 +4434,13 @@ function Remarks({ user }) {
   async function load() {
     const all = await api("GET", "/remarks").catch(() => []);
     setList(all || []);
+    // Only treat the response as this week's remark if it actually looks like one.
+    // "no remark yet" is a null body, but any other empty-but-truthy shape would set
+    // content to undefined and white-screen the editor on its first .trim().
     const c = await api("GET", "/remarks/current").catch(() => null);
-    setCur(c || null);
-    setContent(c ? c.content : "");
+    const week = c && c.id ? c : null;
+    setCur(week);
+    setContent(week && typeof week.content === "string" ? week.content : "");
     const mr = await api("GET", "/remarks/monthly").catch(() => []);
     setMonthly(mr || []);
     const curM = (mr || []).find((m) => monthKeyOf(m.month_start) === curMonthKey);
