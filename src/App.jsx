@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
@@ -91,14 +91,12 @@ const ROLE_LABELS = {
   production_lead: "Production Head", production_staff: "Production Department",
   packing_staff: "Packing Department", delivery_team: "Delivery Department",
 };
-// Every role except the system-only Admin — for nav pages Admin shouldn't see.
-const NON_ADMIN_ROLES = ["super_admin", "production_lead", "production_staff", "packing_staff", "delivery_team"];
-// The Order Board kanban is for the production-floor roles. The Delivery
-// Coordinator works the Delivery workspace; on the board they would only see a
-// single, non-actionable "Ready for Delivery" column that duplicates it, so they
-// are excluded from the board and land in Delivery. (Floor Display stays for
-// them — listed just below Delivery in the nav.)
-const BOARD_ROLES = NON_ADMIN_ROLES.filter((r) => r !== "delivery_team");
+// NON_ADMIN_ROLES and BOARD_ROLES lived here and built the nav's role lists. The nav
+// now asks capabilities instead, and the reasoning they carried moved with them: the
+// Delivery Coordinator is off the Order Board by default because it would show them a
+// single, non-actionable "Ready for Delivery" column that duplicates their own
+// workspace — see page.board's defaults in the backend's lib/capabilities.js. It is a
+// default now rather than a rule, so the owners can change their mind without us.
 
 // Reward scorecard / leaderboard — built 2026-06-10, parked, switched on 2026-09-23 at
 // the owners' request. Brings back the Reports "Scoreboard" tab, the Floor Display
@@ -247,21 +245,38 @@ function shipLabel(dv) {
   return (dv && dv.delivery_man_name) || "—";
 }
 
+// Capability check. The server resolves who gets what and sends the answer down with
+// the signed-in user, so the screen asks exactly the question the API will ask. A
+// missing caps object (an old token, a cached build) means nothing is granted rather
+// than everything — the sidebar goes quiet instead of showing buttons that 403.
+function allows(user, cap) {
+  return !!(user && user.caps && user.caps[cap] === true);
+}
+
+// Which sections exist, and the capability that opens each. Reports is the one entry
+// that is not a single switch: it holds three kinds of report with three different
+// audiences, so the section shows if a role may read any of them.
 const NAV = [
-  { id: "board", label: "Order Board", icon: "board", roles: [...BOARD_ROLES, "admin"] },
+  { id: "board", label: "Order Board", icon: "board", cap: "page.board" },
   // The page and POST /orders/import both shipped, but nothing ever linked here, so the
-  // CSV import was unreachable from the app. Boss-only, matching the endpoint's own
-  // guard — an Admin given the page would just get a 403 out of it.
-  { id: "import", label: "Import Invoices", icon: "upload", roles: ["super_admin"] },
-  { id: "dashboard", label: "Dashboard", icon: "dashboard", roles: ["super_admin", "admin"] },
-  { id: "delivery", label: "Delivery", icon: "truck", roles: ["super_admin", "delivery_team", "admin", "production_lead"] },
+  // CSV import was unreachable from the app.
+  { id: "import", label: "Import Invoices", icon: "upload", cap: "page.import" },
+  { id: "dashboard", label: "Dashboard", icon: "dashboard", cap: "page.dashboard" },
+  { id: "delivery", label: "Delivery", icon: "truck", cap: "page.delivery" },
   { id: "floor", label: "Floor Display", icon: "display" }, // every role; rendered as a distinct launch button, not a workspace tab
-  { id: "reports", label: "Reports", icon: "chart", roles: ["super_admin", "production_lead", "admin"] },
-  { id: "remarks", label: "Production Remarks", icon: "message", roles: ["super_admin", "production_lead", "admin"] },
-  { id: "audit", label: "Audit Trail", icon: "audit", roles: ["super_admin", "admin"] },
-  { id: "users", label: "User Management", icon: "users", roles: ["super_admin", "admin"] },
-  { id: "settings", label: "System Settings", icon: "settings", roles: ["super_admin", "admin"] },
+  { id: "reports", label: "Reports", icon: "chart", anyCap: ["report.production", "report.business", "report.delivery"] },
+  { id: "remarks", label: "Production Remarks", icon: "message", cap: "page.remarks" },
+  { id: "audit", label: "Audit Trail", icon: "audit", cap: "page.audit" },
+  { id: "users", label: "User Management", icon: "users", cap: "page.users" },
+  { id: "settings", label: "System Settings", icon: "settings", cap: "page.settings" },
 ];
+
+function navFor(user) {
+  return NAV.filter((n) => {
+    if (n.anyCap) return n.anyCap.some((c) => allows(user, c));
+    return !n.cap || allows(user, n.cap);
+  });
+}
 const PAGE_META = {
   board: ["Order Board", ""],
   dashboard: ["Dashboard", "Operations overview"],
@@ -1853,18 +1868,20 @@ function OrderDetail({ orderId, user, onUpdated, onClose, changes }) {
   const [uploading, setUploading] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false); // Details "More" expander — keep the wall collapsed; Internal Notes live inside
-  const canMove = ["super_admin"].includes(user.role);
+  // Two different powers used to share one flag. Moving an order about and killing
+  // it is one; changing which lines are on it is another, and an owner may well want
+  // to hand out the first without the second.
+  const canMove = allows(user, "order.move_free");
+  const canEditLines = allows(user, "order.edit_lines");
   // Back-office Admin (deputy) may route an order — set PIC + priority + deadline —
   // and put it on hold (soft, reversible). Advancing stages and Cancel stay Boss-only.
   const canRoute = ["super_admin", "admin"].includes(user.role);
-  const canAssignPic = ["super_admin", "admin", "production_lead"].includes(user.role); // floor supervisor may assign the PIC too
-  // "admin" was missing here while the board card's canMarkTrack and the server both
-  // allow it, so the same tick worked on the card and was hidden inside this panel.
-  const roleCanMark = ["super_admin", "admin", "production_lead", "production_staff", "packing_staff"].includes(user.role);
+  const canAssignPic = allows(user, "order.route"); // floor supervisor may assign the PIC too
+  const roleCanMark = allows(user, "item.mark");
   const isLead = user.role === "production_lead";
   const isFloor = ["production_staff", "packing_staff"].includes(user.role); // pure floor worker — keep their view minimal
   const isDispatch = user.role === "delivery_team"; // delivery coordinator — keep their view delivery-focused
-  const canAmend = ["super_admin", "admin"].includes(user.role); // may correct a placed line (qty / STK / unit)
+  const canAmend = allows(user, "order.amend_line"); // may correct a placed line (qty / STK / unit)
   const [editItem, setEditItem] = useState(null); // { id, sku, name, quantity, unit } while editing a line
   const [catalog, setCatalog] = useState([]); // STK catalogue for amend autofill (Boss/Admin)
   async function load() { try { const o = await api("GET", `/orders/${orderId}`); setOrder(o); setNotes(o.notes || ""); } catch (e) { setOrder({ _error: e.message }); } }
@@ -2285,7 +2302,7 @@ function OrderDetail({ orderId, user, onUpdated, onClose, changes }) {
           {items.length > 0 && canAmend && (
             <div style={{ marginTop: 10, fontSize: 11.5, color: C.text3 }}>Correct a line's STK, quantity or unit here. This changes OMS only — it won't update the SQL Account invoice, so keep them matching. Adding or removing whole lines still happens in SQL Account.</div>
           )}
-          {items.length > 0 && !canAmend && canMove && (
+          {items.length > 0 && !canAmend && canEditLines && (
             <div style={{ marginTop: 10, fontSize: 11.5, color: C.text3 }}>Line items are locked to match the invoice — only an item's status can change. To correct a STK or quantity, fix it in SQL Account.</div>
           )}
         </div>
@@ -2308,7 +2325,7 @@ function OrderDetail({ orderId, user, onUpdated, onClose, changes }) {
               {a.kind === "pod" && <Pill color={C.ready} style={{ fontSize: 10 }}>Proof of delivery</Pill>}
               {a.size != null && <span style={{ fontSize: 11, color: C.text3 }}>{a.size >= 1048576 ? (a.size / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(a.size / 1024)) + " KB"}</span>}
               <span style={{ fontSize: 11.5, color: C.text3, marginLeft: "auto" }}>{a.uploaded_by_name}</span>
-              {canMove && <button onClick={() => removeAttachment(a.id)} title="Remove" style={{ background: "#3a1a1a", border: "none", borderRadius: 6, color: "#fca5a5", cursor: "pointer", width: 24, height: 24, flexShrink: 0 }}>×</button>}
+              {canEditLines && <button onClick={() => removeAttachment(a.id)} title="Remove" style={{ background: "#3a1a1a", border: "none", borderRadius: 6, color: "#fca5a5", cursor: "pointer", width: 24, height: 24, flexShrink: 0 }}>×</button>}
             </div>
           ))}
         </div>
@@ -3447,9 +3464,20 @@ function Reports({ user }) {
   // "staff" = per-person productivity ranking — stays behind STAFF_RANKING_ENABLED.
   // Person-in-charge is shown per-track INSIDE the Production and Packing tabs
   // (PicTrackTable below the metrics), not as its own tab. "staff" ranking stays parked.
-  const tabsForRole = user.role === "production_lead"
-    ? ["production", "packing", "efficiency", ...(STAFF_RANKING_ENABLED ? ["staff"] : []), ...(REWARD_SYSTEM_ENABLED ? ["scorecard"] : [])]
-    : ["production", "packing", "delivery", "efficiency", "mistakes", ...(REWARD_SYSTEM_ENABLED ? ["scorecard"] : []), "trend", "orders", ...(STAFF_RANKING_ENABLED ? ["staff"] : []), "archive"];
+  // Each tab belongs to the capability that guards the endpoint behind it, so a tab is
+  // only offered when the report it fetches will actually come back. The scoreboard has
+  // no role guard on the server and is shown to anyone the flag is on for.
+  const TAB_CAP = {
+    production: "report.production", packing: "report.production",
+    efficiency: "report.production", staff: "report.production",
+    delivery: "report.delivery",
+    mistakes: "report.business", trend: "report.business",
+    orders: "report.business", archive: "report.business",
+  };
+  const tabsForRole = ["production", "packing", "delivery", "efficiency", "mistakes",
+    ...(REWARD_SYSTEM_ENABLED ? ["scorecard"] : []), "trend", "orders",
+    ...(STAFF_RANKING_ENABLED ? ["staff"] : []), "archive"]
+    .filter((t) => !TAB_CAP[t] || allows(user, TAB_CAP[t]));
   const CUSTOM = ["orders", "staff", "efficiency", "mistakes", "scorecard", "trend", "archive"]; // tabs with their own component (no metric cards/trend)
   const TAB_LABEL = { staff: "Staff", pic: "Person in charge", efficiency: "Efficiency", mistakes: "Mistakes", scorecard: "Scoreboard", trend: "Trend", archive: "Archive" };
   const PERIOD_LABEL = { daily: "Today", weekly: "This week", monthly: "This month" };
@@ -4422,8 +4450,8 @@ function Remarks({ user }) {
   const [monthContent, setMonthContent] = useState("");
   const [mBusy, setMBusy] = useState(false);
   const [mSaved, setMSaved] = useState(false);
-  const canPost = ["super_admin", "production_lead", "admin"].includes(user.role); // Reenee (lead) + Misha (admin) co-edit the weekly remark; the owners may too
-  const canEditMonthly = user.role === "super_admin"; // Boss writes the monthly summary
+  const canPost = allows(user, "remarks.write");
+  const canEditMonthly = allows(user, "remarks.monthly");
   const curMonthKey = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; })();
   const monthKeyOf = (dateStr) => { const d = new Date(dateStr); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
   // Show who last touched the note: the editor (if edited) else the original author.
@@ -4797,6 +4825,163 @@ function Users({ user }) {
 }
 
 // ─── Settings ──────────────────────────────────────────────────────────────────
+// The owners' access panel. Rows are capabilities, columns are roles, and the server
+// sends both — the registry is not duplicated here, so a capability added in a later
+// release shows up without touching this file.
+//
+// The Boss column is deliberately absent: that role always has everything, and it is
+// what makes locking every owner out of this screen impossible.
+function AccessPanel() {
+  const [d, setD] = useState(null);          // null = loading, false = failed
+  const [pending, setPending] = useState({}); // { role: { cap: bool } } — unsaved edits
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let cancel = false;
+    api("GET", "/permissions")
+      .then((v) => { if (!cancel) setD(v); })
+      .catch(() => { if (!cancel) setD(false); });
+    return () => { cancel = true; };
+  }, []);
+
+  if (d === false) return <Card><p style={{ color: C.text3, fontSize: 13, margin: 0 }}>Could not load permissions.</p></Card>;
+  if (!d) return <Card><Loading label="Loading permissions…" /></Card>;
+
+  // Takes the capability object, not its id — isDefault needs `defaults` off the same
+  // value, and having the two disagree about what a "cap" is renders every switch off.
+  const valueOf = (role, cap) => {
+    const p = pending[role];
+    if (p && typeof p[cap.id] === "boolean") return p[cap.id];
+    return !!(d.matrix[role] || {})[cap.id];
+  };
+  const isDefault = (role, cap) => valueOf(role, cap) === cap.defaults.includes(role);
+  const toggle = (role, capId, next) => {
+    setSaved(false);
+    setPending((prev) => ({ ...prev, [role]: { ...(prev[role] || {}), [capId]: next } }));
+  };
+
+  // Only send what actually differs from what the server last told us — a no-op tick
+  // and an untick cancel out and should not be written or logged.
+  const changes = {};
+  let changeCount = 0;
+  for (const [role, caps] of Object.entries(pending)) {
+    for (const [capId, v] of Object.entries(caps)) {
+      if (v !== !!(d.matrix[role] || {})[capId]) { (changes[role] || (changes[role] = {}))[capId] = v; changeCount++; }
+    }
+  }
+
+  async function save() {
+    setBusy(true);
+    try {
+      const res = await api("PUT", "/permissions", { changes });
+      setD((prev) => ({ ...prev, matrix: res.matrix, overrides: res.overrides }));
+      setPending({}); setSaved(true);
+    } catch (e) { alert(e.message); } finally { setBusy(false); }
+  }
+
+  // Put every switch in a group back to what it shipped as.
+  function resetGroup(group) {
+    const next = { ...pending };
+    for (const cap of d.capabilities.filter((c) => c.group === group)) {
+      for (const role of d.roles) {
+        const def = cap.defaults.includes(role);
+        if (valueOf(role, cap) !== def) (next[role] || (next[role] = { ...(pending[role] || {}) }))[cap.id] = def;
+      }
+    }
+    setPending(next); setSaved(false);
+  }
+
+  const groups = [];
+  for (const cap of d.capabilities) if (!groups.includes(cap.group)) groups.push(cap.group);
+
+  const cell = { padding: "9px 8px", borderBottom: `1px solid ${C.border}`, textAlign: "center", verticalAlign: "middle" };
+  const th = { padding: "0 8px 10px", fontSize: 11, fontWeight: 700, letterSpacing: 0.6, textTransform: "uppercase", color: C.text3, textAlign: "center", verticalAlign: "bottom" };
+
+  return (
+    <Card>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, margin: 0 }}>Staff access</h3>
+        <span style={{ fontSize: 12, color: C.text3 }}>
+          {changeCount > 0 ? `${changeCount} unsaved change${changeCount === 1 ? "" : "s"}` : saved ? "Saved" : " "}
+        </span>
+      </div>
+      <p style={{ fontSize: 12.5, color: C.text3, marginBottom: 16, maxWidth: "72ch" }}>
+        What each role can open and do. The server checks these too, so turning something off
+        here really closes it rather than just hiding the button. <b style={{ color: C.text2 }}>Boss</b> always
+        has everything and is not listed — that is what stops you locking yourselves out.
+      </p>
+
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 660 }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, textAlign: "left", width: "40%" }}>Capability</th>
+              {d.roles.map((r) => <th key={r} style={th}>{d.roleLabels[r] || r}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => (
+              <Fragment key={g}>
+                <tr>
+                  <td colSpan={d.roles.length + 1} style={{ padding: "16px 0 6px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: 1.2, textTransform: "uppercase", color: C.accent2 }}>{g}</span>
+                      <span style={{ flex: 1, height: 1, background: C.border }} />
+                      <button type="button" onClick={() => resetGroup(g)} style={{ background: "none", border: "none", color: C.text3, fontSize: 11.5, cursor: "pointer", padding: 0 }}>reset to default</button>
+                    </div>
+                  </td>
+                </tr>
+                {d.capabilities.filter((c) => c.group === g).map((cap) => (
+                  <tr key={cap.id}>
+                    <td style={{ ...cell, textAlign: "left" }}>
+                      <div style={{ fontSize: 13.5, color: C.text, fontWeight: 600 }}>{cap.label}</div>
+                      {cap.help && <div style={{ fontSize: 12, color: C.text3, marginTop: 2, maxWidth: "62ch" }}>{cap.help}</div>}
+                    </td>
+                    {d.roles.map((role) => {
+                      const on = valueOf(role, cap);
+                      const moved = !isDefault(role, cap);
+                      return (
+                        <td key={role} style={cell}>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={on}
+                            aria-label={`${cap.label} — ${d.roleLabels[role] || role}`}
+                            onClick={() => toggle(role, cap.id, !on)}
+                            title={moved ? `Changed from the default (${cap.defaults.includes(role) ? "on" : "off"})` : "Default"}
+                            style={{
+                              width: 42, height: 24, borderRadius: 999, cursor: "pointer", position: "relative",
+                              background: on ? C.green + "33" : C.surface2,
+                              border: `1px solid ${on ? C.green + "99" : C.border2}`,
+                              boxShadow: moved ? `0 0 0 2px ${C.accent}55` : "none",
+                              transition: "background .12s, border-color .12s",
+                            }}>
+                            <span style={{
+                              position: "absolute", top: 3, left: on ? 21 : 3, width: 16, height: 16, borderRadius: "50%",
+                              background: on ? C.green : C.text3, transition: "left .12s",
+                            }} />
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 18, flexWrap: "wrap" }}>
+        <Btn onClick={save} disabled={busy || changeCount === 0}>{busy ? "Saving…" : "Save access"}</Btn>
+        {changeCount > 0 && <Btn variant="ghost" size="sm" onClick={() => { setPending({}); setSaved(false); }}>Discard</Btn>}
+        <span style={{ fontSize: 12, color: C.text3 }}>A ring round a switch means it has been moved off its default. Changes are written to the Audit Trail.</span>
+      </div>
+    </Card>
+  );
+}
+
 function Settings({ user }) {
   const [s, setS] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -4974,6 +5159,11 @@ function Settings({ user }) {
         </Card>
       )}
 
+      {/* Boss-only, and hardcoded to the role rather than to a capability: if the power
+          to grant permissions could itself be granted, a role could be handed the means
+          to give itself everything. */}
+      {user && user.role === "super_admin" && <AccessPanel />}
+
       {user && user.role === "super_admin" && (
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Order tracking</h3>
@@ -5134,7 +5324,7 @@ export default function App() {
   // Keep the active page valid for the current role; otherwise fall back to the board.
   useEffect(() => {
     if (!user) return;
-    const allowed = NAV.filter((n) => !n.roles || n.roles.includes(user.role)).map((n) => n.id);
+    const allowed = navFor(user).map((n) => n.id);
     if (page !== "floor" && !allowed.includes(page)) setPage(allowed[0] || "board");
   }, [user, page]);
 
@@ -5146,12 +5336,12 @@ export default function App() {
 
   if (page === "floor") return <FloorDisplay onExit={() => setPage("board")} />;
 
-  const nav = NAV.filter((n) => !n.roles || n.roles.includes(user.role));
+  const nav = navFor(user);
   // Effective page for rendering: if the active page isn't allowed for this role
   // (e.g. delivery_team's default "board"), fall back to their first nav item so a
   // disallowed page never paints for a frame before the guard effect corrects state.
   const view = page === "floor" || nav.some((n) => n.id === page) ? page : (nav[0] ? nav[0].id : "board");
-  const canCreate = ["super_admin"].includes(user.role);
+  const canCreate = allows(user, "order.create");
   const [title, subtitle] = PAGE_META[view] || ["", ""];
 
   return (
