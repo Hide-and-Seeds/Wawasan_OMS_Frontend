@@ -684,6 +684,25 @@ function Field({ label, value, onChange, type = "text", options, placeholder, re
 function Card({ children, style }) {
   return <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "18px 20px", ...style }}>{children}</div>;
 }
+// Every settings block is a titled card with a line of explanation under it. Having
+// that shape in one place keeps the page even and the blocks themselves short.
+function SettingCard({ title, desc, children, style }) {
+  return (
+    <Card style={style}>
+      <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, margin: "0 0 6px" }}>{title}</h3>
+      {desc && <p style={{ fontSize: 12.5, color: C.text3, margin: "0 0 14px", lineHeight: 1.5 }}>{desc}</p>}
+      {children}
+    </Card>
+  );
+}
+function SettingGroup({ title, children }) {
+  return (
+    <section>
+      <h2 style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: 1.6, textTransform: "uppercase", color: C.text3, margin: "0 0 11px" }}>{title}</h2>
+      {children}
+    </section>
+  );
+}
 function Loading({ label = "Loading…" }) {
   return <div style={{ padding: 48, textAlign: "center", color: C.text3, fontSize: 14 }}>{label}</div>;
 }
@@ -4990,24 +5009,9 @@ function Settings({ user }) {
   const [newHol, setNewHol] = useState({ date: "", name: "" });
   const [importBusy, setImportBusy] = useState(false);
   const [showPw, setShowPw] = useState(false);
-  const [weights, setWeights] = useState(null);
-  const [wBusy, setWBusy] = useState(false);
-  const [wSaved, setWSaved] = useState(false);
   const [intakeBusy, setIntakeBusy] = useState(false);
 
   useEffect(() => { api("GET", "/settings").then(setS).catch(() => setS({})); }, []);
-  // Reward-scoreboard weights live in system_settings as a JSON string.
-  useEffect(() => {
-    if (!s) return;
-    let w = { ontime: 30, output: 30, quality: 25, speed: 15 };
-    try { if (s.scorecard_weights) w = { ...w, ...JSON.parse(s.scorecard_weights) }; } catch { /* keep defaults */ }
-    setWeights(w);
-  }, [s]);
-  async function saveWeights() {
-    setWBusy(true);
-    try { await api("PUT", "/settings", { settings: { scorecard_weights: JSON.stringify(weights) } }); setWSaved(true); }
-    catch (e) { alert(e.message); } finally { setWBusy(false); }
-  }
   function loadHolidays() { api("GET", "/settings/holidays").then((d) => setHolidays(d || [])).catch(() => setHolidays([])); }
   useEffect(() => { loadHolidays(); }, []);
   function setField(k, v) { setS((p) => ({ ...p, [k]: v })); setSaved(false); }
@@ -5071,51 +5075,41 @@ function Settings({ user }) {
   const inp = { padding: "8px 12px", background: C.surface, border: `1px solid ${C.border2}`, borderRadius: 9, color: C.text, fontSize: 13.5, colorScheme: "dark" };
   const intakeOn = String(s.order_intake_enabled ?? "true").toLowerCase() !== "false";
   const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+  const isOwner = !!user && user.role === "super_admin";
+  const row = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14, alignItems: "start" };
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 560 }}>
-      <Card>
-        <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Session</h3>
-        <p style={{ fontSize: 12.5, color: C.text3, marginBottom: 14 }}>How long a sign-in stays valid before users must log in again. Applies to new logins.</p>
-        <div style={{ maxWidth: 220 }}>
-          <Field label="Session timeout (hours)" type="number" min="1" value={s.session_timeout_hours ?? ""} onChange={(v) => setField("session_timeout_hours", v)} />
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
-          <Btn onClick={save} disabled={busy}>{busy ? "Saving…" : "Save settings"}</Btn>
-          {saved && <span style={{ color: C.ready, fontSize: 13 }}>Saved ✓</span>}
-        </div>
-      </Card>
-
-      {REWARD_SYSTEM_ENABLED && (
-      <Card>
-        <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Reward scoreboard weights</h3>
-        <p style={{ fontSize: 12.5, color: C.text3, marginBottom: 14 }}>How the monthly reward score is blended for the Scoreboard report and the Floor Display. Drag to set what matters most — the shares re-balance to 100% automatically.</p>
-        {weights && (
-          <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 14 }}>
-              {[["ontime", "On-time"], ["output", "Output"], ["quality", "Quality"], ["speed", "Speed"]].map(([k, lbl]) => {
-                const sum = (weights.ontime + weights.output + weights.quality + weights.speed) || 1;
-                return (
-                  <div key={k}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: C.text2, marginBottom: 6 }}>
-                      <span>{lbl}</span><span style={{ fontFamily: MONO, color: C.text }}>{Math.round(weights[k] / sum * 100)}%</span>
-                    </div>
-                    <input type="range" min="0" max="60" value={weights[k]} onChange={(e) => { const v = +e.target.value; setWeights((p) => ({ ...p, [k]: v })); setWSaved(false); }} style={{ width: "100%", accentColor: C.accent }} />
-                  </div>
-                );
-              })}
+    // Wider than it was: the access matrix is a table and was being squeezed into a
+    // 560px column, which gave it a scrollbar of its own on a desktop screen. The small
+    // blocks sit two-up so the page does not become one long ribbon instead.
+    <div style={{ display: "flex", flexDirection: "column", gap: 30, maxWidth: 1040 }}>
+      <SettingGroup title="General">
+        <div style={row}>
+          <SettingCard title="Session" desc="How long a sign-in stays valid before users must log in again. Applies to new logins.">
+            <div style={{ maxWidth: 220 }}>
+              <Field label="Session timeout (hours)" type="number" min="1" value={s.session_timeout_hours ?? ""} onChange={(v) => setField("session_timeout_hours", v)} />
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
-              <Btn onClick={saveWeights} disabled={wBusy}>{wBusy ? "Saving…" : "Save weights"}</Btn>
-              {wSaved && <span style={{ color: C.ready, fontSize: 13 }}>Saved ✓</span>}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
+              <Btn onClick={save} disabled={busy}>{busy ? "Saving…" : "Save settings"}</Btn>
+              {saved && <span style={{ color: C.ready, fontSize: 13 }}>Saved ✓</span>}
             </div>
-          </>
-        )}
-      </Card>
-      )}
+          </SettingCard>
 
-      <Card>
-        <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Holiday calendar</h3>
-        <p style={{ fontSize: 12.5, color: C.text3, marginBottom: 14 }}>Public holidays and factory off-days. When an order's delivery date lands on one, whoever creates the order is warned.</p>
+          {isOwner && (
+            <SettingCard title="Order tracking" desc="Automatic order intake from SQL Account. Turn OFF to stop new invoices being recorded (for security or maintenance). Existing orders and the board are untouched; turn back ON to resume.">
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 700, color: intakeOn ? C.ready : "#fca5a5" }}>
+                  <span style={{ width: 9, height: 9, borderRadius: "50%", background: intakeOn ? C.ready : "#fca5a5" }} />
+                  {intakeOn ? "Tracking ON — recording new invoices" : "Tracking OFF — new invoices ignored"}
+                </span>
+                <Btn size="sm" variant={intakeOn ? "danger" : "success"} onClick={toggleIntake} disabled={intakeBusy}>{intakeBusy ? "…" : intakeOn ? "Turn OFF" : "Turn ON"}</Btn>
+              </div>
+            </SettingCard>
+          )}
+        </div>
+      </SettingGroup>
+
+      <SettingGroup title="Calendar">
+        <SettingCard title="Holiday calendar" desc="Public holidays and factory off-days. When an order's delivery date lands on one, whoever creates the order is warned.">
         {holidays.length === 0 && <Empty label="No holidays added yet." />}
         {holidays.length > 0 && (
           <div style={{ marginBottom: 12 }}>
@@ -5146,36 +5140,25 @@ function Settings({ user }) {
           </label>
           <span style={{ fontSize: 11.5, color: C.text3 }}>two columns: date · name</span>
         </div>
-      </Card>
+        </SettingCard>
+      </SettingGroup>
 
-      {user && user.role === "super_admin" && (
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Shared login password</h3>
-          <p style={{ fontSize: 12.5, color: C.text3, marginBottom: 14 }}>Everyone signs in with this one shared password (staff still use their own email). Shown here so you can look it up if anyone forgets.</p>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ ...inp, minWidth: 150, fontFamily: MONO, letterSpacing: showPw ? 0.5 : 3, color: C.text, userSelect: "all" }}>{showPw ? (s.login_password || "wawasan123") : "••••••••"}</span>
-            <Btn size="sm" variant="ghost" onClick={() => setShowPw((v) => !v)}>{showPw ? "Hide" : "Show"}</Btn>
+      {/* The password and who may use the app belong together. Both are Boss-only, and
+          the access matrix is hardcoded to the role rather than to a capability: if the
+          power to grant permissions could itself be granted, a role could be handed the
+          means to give itself everything. */}
+      {isOwner && (
+        <SettingGroup title="Access">
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <SettingCard title="Shared login password" desc="Everyone signs in with this one shared password (staff still use their own email). Shown here so you can look it up if anyone forgets." style={{ maxWidth: 480 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ ...inp, minWidth: 150, fontFamily: MONO, letterSpacing: showPw ? 0.5 : 3, color: C.text, userSelect: "all" }}>{showPw ? (s.login_password || "wawasan123") : "••••••••"}</span>
+                <Btn size="sm" variant="ghost" onClick={() => setShowPw((v) => !v)}>{showPw ? "Hide" : "Show"}</Btn>
+              </div>
+            </SettingCard>
+            <AccessPanel />
           </div>
-        </Card>
-      )}
-
-      {/* Boss-only, and hardcoded to the role rather than to a capability: if the power
-          to grant permissions could itself be granted, a role could be handed the means
-          to give itself everything. */}
-      {user && user.role === "super_admin" && <AccessPanel />}
-
-      {user && user.role === "super_admin" && (
-        <Card>
-          <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>Order tracking</h3>
-          <p style={{ fontSize: 12.5, color: C.text3, marginBottom: 14 }}>Automatic order intake from SQL Account. Turn OFF to stop new invoices being recorded (for security or maintenance). Existing orders and the board are untouched; turn back ON to resume.</p>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 700, color: intakeOn ? C.ready : "#fca5a5" }}>
-              <span style={{ width: 9, height: 9, borderRadius: "50%", background: intakeOn ? C.ready : "#fca5a5" }} />
-              {intakeOn ? "Tracking ON — recording new invoices" : "Tracking OFF — new invoices ignored"}
-            </span>
-            <Btn size="sm" variant={intakeOn ? "danger" : "success"} onClick={toggleIntake} disabled={intakeBusy}>{intakeBusy ? "…" : intakeOn ? "Turn OFF" : "Turn ON"}</Btn>
-          </div>
-        </Card>
+        </SettingGroup>
       )}
     </div>
   );
