@@ -5001,6 +5001,108 @@ function AccessPanel() {
   );
 }
 
+// Clearing the board. Nothing is destroyed — every row is copied into a mirror table
+// first — but it is still the biggest lever in the app, so it asks for the order count
+// to be typed rather than taking a click. If the board moves between loading this and
+// pressing the button, the number stops matching and the server refuses.
+function BoardArchiveCard() {
+  const [census, setCensus] = useState(null);   // null = loading, false = failed
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const [err, setErr] = useState("");
+
+  const load = () => api("GET", "/orders/purge/preview").then(setCensus).catch(() => setCensus(false));
+  useEffect(() => {
+    let cancel = false;
+    api("GET", "/orders/purge/preview")
+      .then((v) => { if (!cancel) setCensus(v); })
+      .catch(() => { if (!cancel) setCensus(false); });
+    return () => { cancel = true; };
+  }, []);
+
+  async function archive() {
+    setBusy(true); setErr("");
+    try {
+      const res = await api("POST", "/orders/purge", { confirm: census.orders });
+      setDone(res); setTyped(""); await load();
+    } catch (e) {
+      setErr(e.message);
+      await load(); // the count it refused over is the one worth showing next
+    } finally { setBusy(false); }
+  }
+
+  const danger = "#fca5a5";
+  const frame = { background: "#1e1412", border: `1px solid ${C.danger}55`, borderRadius: 14, padding: "18px 20px" };
+  if (census === false) return <div style={frame}><p style={{ margin: 0, fontSize: 13, color: C.text3 }}>Could not read the board.</p></div>;
+  if (!census) return <div style={frame}><Loading label="Reading the board…" /></div>;
+
+  const n = census.orders;
+  // Anything not finished is the part worth pausing over.
+  const live = Object.entries(census.by_stage || {})
+    .filter(([st]) => st !== "delivered" && st !== "cancelled")
+    .map(([st, count]) => [(STAGE_LABELS[st] || {}).label || st, count]);
+  const liveTotal = live.reduce((a, [, c]) => a + c, 0);
+
+  return (
+    <div style={frame}>
+      <h3 style={{ fontSize: 14, fontWeight: 700, color: danger, margin: "0 0 6px" }}>Clear the board</h3>
+      <p style={{ fontSize: 12.5, color: C.text3, margin: "0 0 14px", lineHeight: 1.5, maxWidth: "70ch" }}>
+        Moves every order into the archive and starts the board empty — for going live after
+        testing. Nothing is destroyed: invoice numbers, lines, stage history and deliveries are
+        all kept and can be restored. Attachments stay in storage. The Audit Trail is untouched.
+      </p>
+
+      {done ? (
+        <div style={{ background: C.green + "14", border: `1px solid ${C.green}55`, borderRadius: 10, padding: "12px 14px" }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: C.green, marginBottom: 6 }}>Board cleared ✓</div>
+          <div style={{ fontSize: 12.5, color: C.text2, lineHeight: 1.7 }}>
+            Archived {done.moved.orders} orders, {done.moved.order_items} lines,{" "}
+            {done.moved.deliveries} deliveries, {done.moved.stage_transitions} stage changes.<br />
+            Batch <span style={{ fontFamily: MONO, color: C.text }}>{done.purge_id}</span> — quote this to restore it.
+          </div>
+        </div>
+      ) : n === 0 ? (
+        <p style={{ fontSize: 13, color: C.text3, margin: 0 }}>
+          The board is already empty.{census.archived_already > 0 && ` ${census.archived_already} orders sit in the archive.`}
+        </p>
+      ) : (
+        <>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            {[["Orders", n], ["Lines", census.items], ["Deliveries", census.deliveries], ["Attachments", census.attachments]].map(([lbl, v]) => (
+              <span key={lbl} style={{ display: "inline-flex", alignItems: "baseline", gap: 6, background: C.surface2, border: `1px solid ${C.border2}`, borderRadius: 9, padding: "7px 12px", fontSize: 15, fontWeight: 800, color: C.text }}>
+                {v}<span style={{ fontSize: 11, fontWeight: 600, color: C.text3, textTransform: "uppercase", letterSpacing: 0.5 }}>{lbl}</span>
+              </span>
+            ))}
+          </div>
+
+          {liveTotal > 0 && (
+            <div style={{ background: C.hold + "14", border: `1px solid ${C.hold}55`, borderRadius: 10, padding: "10px 13px", marginBottom: 14, fontSize: 12.5, color: C.text2 }}>
+              <b style={{ color: C.hold }}>{liveTotal} of these are still being worked on</b> — {live.map(([lbl, c]) => `${c} in ${lbl}`).join(", ")}. They go to the archive too.
+            </div>
+          )}
+
+          <label style={{ display: "block", fontSize: 12.5, color: C.text2, marginBottom: 7 }}>
+            Type <b style={{ fontFamily: MONO, color: C.text }}>{n}</b> to confirm
+          </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <input
+              value={typed}
+              onChange={(e) => { setTyped(e.target.value); setErr(""); }}
+              inputMode="numeric"
+              aria-label={`Type ${n} to confirm clearing the board`}
+              style={{ padding: "8px 12px", background: C.surface, border: `1px solid ${C.border2}`, borderRadius: 9, color: C.text, fontSize: 14, fontFamily: MONO, width: 110, colorScheme: "dark" }} />
+            <Btn variant="danger" onClick={archive} disabled={busy || typed.trim() !== String(n)}>
+              {busy ? "Archiving…" : `Archive ${n} order${n === 1 ? "" : "s"}`}
+            </Btn>
+          </div>
+          {err && <p style={{ color: danger, fontSize: 12.5, margin: "12px 0 0", maxWidth: "70ch" }}>{err}</p>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Settings({ user }) {
   const [s, setS] = useState(null);
   const [saved, setSaved] = useState(false);
@@ -5158,6 +5260,15 @@ function Settings({ user }) {
             </SettingCard>
             <AccessPanel />
           </div>
+        </SettingGroup>
+      )}
+
+      {/* Last on the page and in its own group, because it is the one thing here that
+          changes what everybody else sees tomorrow morning. Gated on the capability,
+          which nobody holds by default except the Boss. */}
+      {allows(user, "order.purge") && (
+        <SettingGroup title="Danger zone">
+          <BoardArchiveCard />
         </SettingGroup>
       )}
     </div>
