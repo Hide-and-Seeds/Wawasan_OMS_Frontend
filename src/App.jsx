@@ -258,9 +258,13 @@ function allows(user, cap) {
 // audiences, so the section shows if a role may read any of them.
 const NAV = [
   { id: "board", label: "Order Board", icon: "board", cap: "page.board" },
-  // The page and POST /orders/import both shipped, but nothing ever linked here, so the
-  // CSV import was unreachable from the app.
-  { id: "import", label: "Import Invoices", icon: "upload", cap: "page.import" },
+  // No Import Invoices entry on purpose. It was linked here on 2026-09-23 because the
+  // page had shipped with no way to reach it; it came straight back out on 2026-09-25
+  // because the people using this app do not work in SQL Account and a tab asking them
+  // for a CSV export from it is a tab that can only confuse. Invoices arrive through
+  // the email-to-board pipeline instead. ImportInvoices and POST /orders/import both
+  // stay — the endpoint is still guarded by order.import and still usable from the
+  // bridge — the page simply has no door in the UI again, this time deliberately.
   { id: "dashboard", label: "Dashboard", icon: "dashboard", cap: "page.dashboard" },
   { id: "delivery", label: "Delivery", icon: "truck", cap: "page.delivery" },
   { id: "floor", label: "Floor Display", icon: "display" }, // every role; rendered as a distinct launch button, not a workspace tab
@@ -5536,6 +5540,8 @@ export default function App() {
         <main style={{ flex: 1, padding: isMobile ? "16px 14px 32px" : "20px 26px 40px", overflowX: "auto" }}>
           {view === "board" && <OrderBoard user={user} search={search} weekOnly={weekOnly} statusFilter={statusFilter} refreshKey={boardKey} onOpenOrder={(o) => openOrder(o.id)} onCount={setBoardCount} unreadIds={unreadIds} />}
           {view === "dashboard" && <Dashboard onOpenOrder={(id) => openOrder(id)} />}
+          {/* Kept wired but unreachable: `view` only ever takes an id from NAV, and NAV
+              no longer carries "import". Put the entry back and this works again. */}
           {view === "import" && <ImportInvoices onImported={bumpBoard} onOpenOrder={(id) => openOrder(id)} />}
           {view === "delivery" && <Delivery user={user} onOpenOrder={(id) => openOrder(id)} />}
           {view === "reports" && <Reports user={user} />}
