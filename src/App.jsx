@@ -5268,9 +5268,10 @@ function Settings({ user }) {
       )}
 
       {/* Last on the page and in its own group, because it is the one thing here that
-          changes what everybody else sees tomorrow morning. Gated on the capability,
-          which nobody holds by default except the Boss. */}
-      {allows(user, "order.purge") && (
+          changes what everybody else sees tomorrow morning. Hardcoded to the Boss rather
+          than gated on a capability: a capability defaulting to nobody can still be
+          granted, and this one must not be grantable. Same rule as the panel above it. */}
+      {isOwner && (
         <SettingGroup title="Danger zone">
           <BoardArchiveCard />
         </SettingGroup>
