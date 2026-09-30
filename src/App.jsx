@@ -2642,6 +2642,25 @@ function ImportInvoices({ onImported, onOpenOrder }) {
 }
 
 // ─── Dashboard ─────────────────────────────────────────────────────────────────
+// How long since an invoice last arrived by itself, and whether that is worth a
+// second look. 24 hours rather than something tighter because invoices only come on
+// working days: a four-hour rule would go amber every morning and be ignored within a
+// week, which is worse than not having it. A Monday after a long weekend will show
+// amber and be fine — that is the cost of never crying wolf on a Tuesday afternoon.
+const INTAKE_STALE_HOURS = 24;
+
+function intakeHealth(at) {
+  if (!at) return { stale: true, label: "— nothing yet" };
+  const ms = Date.now() - new Date(at).getTime();
+  if (!Number.isFinite(ms)) return { stale: true, label: "— unknown" };
+  const mins = Math.round(ms / 60000);
+  const label = mins < 1 ? "just now"
+    : mins < 60 ? `${mins} minute${mins === 1 ? "" : "s"} ago`
+    : mins < 1440 ? `${Math.round(mins / 60)} hour${Math.round(mins / 60) === 1 ? "" : "s"} ago`
+    : `${Math.round(mins / 1440)} day${Math.round(mins / 1440) === 1 ? "" : "s"} ago`;
+  return { stale: ms > INTAKE_STALE_HOURS * 3600000, label };
+}
+
 function Dashboard({ onOpenOrder }) {
   const [d, setD] = useState(null);
   useEffect(() => { api("GET", "/reports/dashboard").then(setD).catch(() => setD({ _error: true })); }, []);
@@ -2656,11 +2675,29 @@ function Dashboard({ onOpenOrder }) {
     { label: "Active Staff", value: d.active_staff, color: C.ready },
     { label: "Overdue", value: (d.overdue_orders || []).length, color: C.danger },
   ];
+  const intake = intakeHealth(d.last_intake_at);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px,1fr))", gap: 14 }}>
         {metrics.map((m) => <Card key={m.label}><div style={{ fontSize: 30, fontWeight: 800, color: m.color }}>{m.value ?? 0}</div><div style={{ fontSize: 12.5, color: C.text3, marginTop: 2 }}>{m.label}</div></Card>)}
       </div>
+
+      {/* Both feeds that fill this board run outside the app, so nothing in here notices
+          when one stops. On 2026-09-30 a morning's invoices never arrived and the first
+          anyone knew was a person counting. This is the line that says so. */}
+      <Card style={{ borderColor: intake.stale ? C.hold + "88" : C.border, background: intake.stale ? C.hold + "12" : C.surface }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 11, flexWrap: "wrap" }}>
+          <span style={{ width: 9, height: 9, borderRadius: "50%", flexShrink: 0, background: intake.stale ? C.hold : C.ready }} />
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: intake.stale ? C.hold : C.text }}>
+            Last invoice received {intake.label}
+          </span>
+          <span style={{ fontSize: 12.5, color: C.text3 }}>
+            {intake.stale
+              ? "Nothing has come in for a while — check that SQL Account is sending and that Order tracking is on."
+              : "Invoices are arriving from SQL Account."}
+          </span>
+        </div>
+      </Card>
       <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 18 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 14 }}>Orders by stage</h3>
