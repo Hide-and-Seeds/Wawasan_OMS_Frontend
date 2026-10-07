@@ -4691,42 +4691,48 @@ function Audit() {
   const [period, setPeriod] = useState("all"); // all | weekly | monthly | custom
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // The user + action filters run on the server, across the whole log. They used to
+  // filter only the rows already loaded, so a person whose edits sat past the newest
+  // 200 seemed to have none (2026-10-07). userF holds a user id.
   const [userF, setUserF] = useState("");
   const [actionF, setActionF] = useState("");
+  const [facets, setFacets] = useState(null); // every user + action that has a row
+  useEffect(() => { api("GET", "/reports/audit/facets").then(setFacets).catch(() => setFacets(null)); }, []);
 
   const ymd = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-  useEffect(() => {
+  function auditParams(limit) {
     let f = "", t = "";
     if (period === "weekly") { const x = new Date(); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); f = ymd(x); }
     else if (period === "monthly") { const x = new Date(); f = ymd(new Date(x.getFullYear(), x.getMonth(), 1)); }
     else if (period === "custom") { f = from; t = to; }
-    const p = new URLSearchParams({ limit: String(cap) });
+    const p = new URLSearchParams({ limit: String(limit) });
     if (f) p.set("from", f);
     if (t) p.set("to", `${t} 23:59:59`);
+    if (userF) p.set("user_id", userF);
+    if (actionF) p.set("action", actionF);
+    return p;
+  }
+  useEffect(() => {
     setD(null);
-    api("GET", `/reports/audit?${p.toString()}`).then(setD).catch(() => setD({ logs: [] }));
-  }, [period, from, to, cap]);
+    api("GET", `/reports/audit?${auditParams(cap).toString()}`).then(setD).catch(() => setD({ logs: [] }));
+  }, [period, from, to, cap, userF, actionF]); // eslint-disable-line react-hooks/exhaustive-deps
   // Changing the range/period resets back to the fast newest-200 view.
   useEffect(() => { setAllLogs(false); setCap(200); }, [period, from, to]);
+  useEffect(() => { setCap(200); }, [userF, actionF]);
 
   const allLogsData = d && d.logs ? d.logs : [];
-  const userOpts = [...new Set(allLogsData.map((l) => l.user_name).filter(Boolean))].sort();
-  const actionOpts = [...new Set(allLogsData.map((l) => l.action).filter(Boolean))].sort();
-  const logs = allLogsData.filter((l) => (!userF || l.user_name === userF) && (!actionF || l.action === actionF));
+  // Fall back to what is on screen if the facets call failed.
+  const userOpts = facets && facets.users ? facets.users
+    : [...new Map(allLogsData.filter((l) => l.user_id).map((l) => [l.user_id, { id: l.user_id, name: l.user_name }])).values()]
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const actionOpts = facets && facets.actions ? facets.actions : [...new Set(allLogsData.map((l) => l.action).filter(Boolean))].sort();
+  const logs = allLogsData;
   const shownLogs = allLogs ? logs : logs.slice(0, 3);
-  const total = (userF || actionF) ? logs.length : (d && d.total != null ? d.total : logs.length);
+  const total = d && d.total != null ? d.total : logs.length;
   async function exportCsv() {
     // Pull the full matching range (not just the 200 shown) so the export is a complete record.
-    let f = "", t = "";
-    if (period === "weekly") { const x = new Date(); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); f = ymd(x); }
-    else if (period === "monthly") { const x = new Date(); f = ymd(new Date(x.getFullYear(), x.getMonth(), 1)); }
-    else if (period === "custom") { f = from; t = to; }
-    const p = new URLSearchParams({ limit: "100000" });
-    if (f) p.set("from", f);
-    if (t) p.set("to", `${t} 23:59:59`);
     let full = logs;
-    try { const r = await api("GET", `/reports/audit?${p.toString()}`); if (r && r.logs) full = r.logs; } catch (e) { /* fall back to the loaded rows */ }
-    full = full.filter((l) => (!userF || l.user_name === userF) && (!actionF || l.action === actionF));
+    try { const r = await api("GET", `/reports/audit?${auditParams(100000).toString()}`); if (r && r.logs) full = r.logs; } catch (e) { /* fall back to the loaded rows */ }
     const rows = [["When", "User", "Action", "Details", "Invoice"]];
     for (const l of full) rows.push([new Date(l.created_at).toLocaleString(), l.user_name, l.action, l.details, l.invoice_number || ""]);
     downloadCsv(`audit-${period}.csv`, rows);
@@ -4744,7 +4750,7 @@ function Audit() {
         </div>
         <select value={userF} onChange={(e) => setUserF(e.target.value)} title="Filter by user" style={{ padding: "7px 10px", background: C.surface, border: `1px solid ${C.border2}`, borderRadius: 8, color: C.text, fontSize: 13 }}>
           <option value="" style={{ background: C.bg2 }}>All users</option>
-          {userOpts.map((u) => <option key={u} value={u} style={{ background: C.bg2 }}>{u}</option>)}
+          {userOpts.map((u) => <option key={u.id} value={u.id} style={{ background: C.bg2 }}>{u.name}</option>)}
         </select>
         <select value={actionF} onChange={(e) => setActionF(e.target.value)} title="Filter by action" style={{ padding: "7px 10px", background: C.surface, border: `1px solid ${C.border2}`, borderRadius: 8, color: C.text, fontSize: 13 }}>
           <option value="" style={{ background: C.bg2 }}>All actions</option>
