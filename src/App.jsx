@@ -25,6 +25,46 @@ async function api(method, path, body, isFormData = false) {
   return res.status === 204 ? null : res.json();
 }
 
+// ─── Polling ─────────────────────────────────────────────────────────────────
+// Every poll is answered from Supabase, whose Free plan allows 5 GB of egress a
+// month, and an open board used to pull the whole board every 3s. So a hidden tab
+// polls nothing, and the board is fetched only when its fingerprint changes.
+const BOARD_POLL_MS = 3000;
+
+// Run `tick` every `ms` while this tab is on screen. A hidden tab (minimised, behind
+// another tab, a locked phone) fetches nothing; coming back runs a tick at once, so
+// the screen is current before anyone reads it. A tick still in flight is not
+// started again, unless it has hung for 5 intervals (30s at least): a request that
+// never settles (captive portal, a TV waking from sleep) must not stop the wall for
+// good. The latest render's `tick` is the one called.
+function useVisiblePoll(tick, ms) {
+  const tickRef = useRef(tick);
+  useEffect(() => { tickRef.current = tick; });
+  useEffect(() => {
+    let t = null, startedAt = 0, seq = 0;
+    const run = async () => {
+      if (startedAt && Date.now() - startedAt < Math.max(ms * 5, 30000)) return;
+      const me = ++seq;
+      startedAt = Date.now();
+      try { await tickRef.current(); } finally { if (me === seq) startedAt = 0; }
+    };
+    const start = () => { if (!t) t = setInterval(run, ms); };
+    const stop = () => { clearInterval(t); t = null; };
+    const onVis = () => { if (document.visibilityState === "hidden") stop(); else { run(); start(); } };
+    if (document.visibilityState !== "hidden") start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stop(); document.removeEventListener("visibilitychange", onVis); };
+  }, [ms]);
+}
+
+// The board's fingerprint (/orders/kanban/version, ~100 bytes), or "" when it can't
+// be had: a backend without the endpoint, a network blip. "" never matches, so the
+// caller falls back to fetching the whole board, as it always did.
+async function boardVersion(weekOnly) {
+  try { return (await api("GET", `/orders/kanban/version${weekOnly ? "?week=current" : ""}`)).version || ""; }
+  catch { return ""; }
+}
+
 // ─── Theme ───────────────────────────────────────────────────────────────────
 const C = {
   bg: "#100e0c", bg2: "#16130f", surface: "#1c1813", surface2: "#241f18",
@@ -1059,13 +1099,19 @@ function OrderBoard({ user, search, weekOnly, statusFilter, onOpenOrder, refresh
   const setViewStage = (s) => { setViewStageRaw(s); try { localStorage.setItem("oms_board_stage", s); } catch (e) {} };
   const stages = visibleStages(user.role);
   const lastSigRef = useRef("");
+  const lastVerRef = useRef(""); // fingerprint of the board on screen; "" = unknown, so the next check fetches
   const pausePollRef = useRef(false);
   const persistingRef = useRef(false);
-  async function load(silent) {
+  // `ver` is the fingerprint check() already read; without one (first paint, after an
+  // action) it is read here. Either way it is read BEFORE the board, so the stored
+  // fingerprint can only be older than what is shown, never newer.
+  async function load(silent, ver) {
     if (!silent) setLoading(true);
     setErr("");
     try {
+      const v = ver !== undefined ? ver : await boardVersion(weekOnly);
       const d = await api("GET", `/orders/kanban${weekOnly ? "?week=current" : ""}`);
+      lastVerRef.current = v;
       const sig = JSON.stringify(d);
       if (sig !== lastSigRef.current) {            // only re-render when the board actually changed
         lastSigRef.current = sig;
@@ -1076,12 +1122,16 @@ function OrderBoard({ user, search, weekOnly, statusFilter, onOpenOrder, refresh
     finally { if (!silent) setLoading(false); }
   }
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [weekOnly, refreshKey]);
-  // Near-instant board: re-check every 3s, but never mid-drag, mid-confirm or mid-reorder, so it can't fight the user.
+  // Near-instant board: every 3s ask whether it changed and fetch it only when it has,
+  // but never mid-drag, mid-confirm or mid-reorder, so it can't fight the user.
   useEffect(() => { pausePollRef.current = !!(dragId || confirmAdv || moveBack); }, [dragId, confirmAdv, moveBack]);
-  useEffect(() => {
-    const t = setInterval(() => { if (!pausePollRef.current && !persistingRef.current) load(true); }, 3000);
-    return () => clearInterval(t); /* eslint-disable-next-line */
-  }, [weekOnly]);
+  async function check() {
+    if (pausePollRef.current || persistingRef.current) return;
+    const ver = await boardVersion(weekOnly);
+    if (ver && ver === lastVerRef.current) return;
+    if (!pausePollRef.current && !persistingRef.current) await load(true, ver);
+  }
+  useVisiblePoll(check, BOARD_POLL_MS);
 
   function advance(order, to) { setConfirmAdv({ order, to }); }
   // Split board: the packing→Ready arrow only shows once every line is packed, so the
@@ -1311,7 +1361,8 @@ function FloorScoreboard() {
   const [unit, setUnit] = useState("dept");
   const [d, setD] = useState(null);
   async function load(u) { try { setD(await api("GET", `/reports/scorecard?unit=${u}&period=monthly`)); } catch { /* keep last */ } }
-  useEffect(() => { load(unit); const t = setInterval(() => load(unit), 60000); return () => clearInterval(t); }, [unit]);
+  useEffect(() => { if (document.visibilityState !== "hidden") load(unit); }, [unit]);
+  useVisiblePoll(() => load(unit), 60000);
   useEffect(() => { const t = setInterval(() => setUnit((u) => (u === "dept" ? "people" : "dept")), 12000); return () => clearInterval(t); }, []);
   const lb = (d && d.leaderboard) || [];
   const top = lb.slice(0, 3), rest = lb.slice(3, 8);
@@ -1420,8 +1471,10 @@ function useSpotlight(pool, resetKey, budget) {
   }, [pool, budget]);
   const len = slides.length;
   useEffect(() => { setIdx(0); }, [resetKey]);
-  // Every board poll rebuilds the pool, which drops the cached line items with it, so
-  // the wall picks up ticks made on the Order Board instead of showing a stale list.
+  // Every board change the wall picks up rebuilds the pool, which drops the cached line
+  // items and re-reads the order on show, so the wall shows ticks made on the Order
+  // Board instead of a stale list. (A line tick changes the board fingerprint, so it
+  // always counts as a change.)
   useEffect(() => { cache.current = {}; }, [pool]);
   useEffect(() => {
     if (len === 0) return;
@@ -1435,12 +1488,13 @@ function useSpotlight(pool, resetKey, budget) {
     let cancel = false;
     async function go() {
       if (!spotId) { setDetail(null); return; }
-      if (cache.current[spotId]) { setDetail(cache.current[spotId]); return; }
-      try { const d = await api("GET", `/orders/${spotId}`); if (!cancel) { cache.current[spotId] = d; setDetail(d); } }
+      const c = cache.current; // a response that lands after the board changed fills the discarded cache, not the new one
+      if (c[spotId]) { setDetail(c[spotId]); return; }
+      try { const d = await api("GET", `/orders/${spotId}`); if (!cancel) { c[spotId] = d; setDetail(d); } }
       catch { if (!cancel) setDetail(null); }
     }
     go(); return () => { cancel = true; };
-  }, [spotId]);
+  }, [spotId, pool]);
   return { spot, detail, page: slide ? slide.page : 0,
     idx: slide ? slide.orderIdx : 0, total: pool.length };
 }
@@ -1684,13 +1738,26 @@ function FloorDisplay({ onExit }) {
     return () => { live = false; };
   }, []);
 
-  async function load() {
+  // The wall runs unattended and polls like the board: a fingerprint check every 3s,
+  // the board (and stats) only when it changes. `ver` works as in OrderBoard.load.
+  const verRef = useRef("");
+  async function load(ver) {
     try {
+      const v = ver !== undefined ? ver : await boardVersion(weekOnly);
       const [b, s] = await Promise.all([api("GET", `/orders/kanban${weekOnly ? "?week=current" : ""}`), api("GET", "/orders/stats")]);
-      setBoard(b); setStats(s);
+      setBoard(b); setStats(s); verRef.current = v;
     } catch (e) { /* keep last */ }
   }
-  useEffect(() => { load(); const t = setInterval(load, 3000); return () => clearInterval(t); /* eslint-disable-next-line */ }, [weekOnly]);
+  async function check() {
+    const ver = await boardVersion(weekOnly);
+    if (!ver || ver !== verRef.current) await load(ver);
+  }
+  // "Overdue" and "delivered today" roll over at midnight without the board changing,
+  // so the stats also refresh on their own, slowly (three counts, a few hundred bytes).
+  async function loadStats() { try { setStats(await api("GET", "/orders/stats")); } catch { /* keep last */ } }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [weekOnly]);
+  useVisiblePoll(check, BOARD_POLL_MS);
+  useVisiblePoll(loadStats, 60000);
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
   // The wall is a fixed 1920×1080 canvas scaled to fill the screen, so it reads the
   // same proportion on 1080p, 1440p or a 4K TV (×2) — and from further back.
@@ -5449,9 +5516,12 @@ export default function App() {
       } catch (e) { /* best effort */ }
     }
   }
-  useEffect(() => {
-    if (!user) return;
-    const poll = () => api("GET", "/notifications?unread_only=1").then((d) => {
+  // The wall display has no bell and no toasts, so it skips this poll; a TV left on
+  // all day would otherwise fetch the unread list every 10s for nothing.
+  const onFloor = page === "floor";
+  function pollNotifications() {
+    if (!user || onFloor) return;
+    return api("GET", "/notifications?unread_only=1").then((d) => {
       const list = d.notifications || [], count = d.unread_count || 0;
       setUnread(count);
       setUnreadIds(new Set(list.filter((n) => n.order_id).map((n) => n.order_id)));
@@ -5460,8 +5530,9 @@ export default function App() {
       if (prevUnreadRef.current >= 0 && count > prevUnreadRef.current && list[0] && list[0].loud !== false) pushToast(list[0]);
       prevUnreadRef.current = count;
     }).catch(() => {});
-    poll(); const t = setInterval(poll, 10000); return () => clearInterval(t);
-  }, [user]);
+  }
+  useEffect(() => { pollNotifications(); }, [user, onFloor]); // eslint-disable-line react-hooks/exhaustive-deps
+  useVisiblePoll(pollNotifications, 10000);
 
   // Keep the active page valid for the current role; otherwise fall back to the board.
   useEffect(() => {
